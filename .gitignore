@@ -1,0 +1,41 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+
+# Secrets
+.env
+**/.env
+
+# Test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PyInstaller build output (all artifacts)
+briner_agent/build/
+briner_agent/dist/
+release/
+nap_v*.zip
+
+# Runtime state (written to %APPDATA%\NAP Files-Sorter when frozen)
+briner_agent/logs/
+briner_agent/**/logs/
+briner_agent/**/*.db
+briner_agent/**/user_settings.json
+
+# Workspace de usuario
+briner_agent/workspace/*
+!briner_agent/workspace/.keep
+
+# Temporales de tests
+briner_agent/.tmp_tests/
+
+# OS/editor noise
+.claude/
+Thumbs.db
+desktop.ini
+.DS_Store
