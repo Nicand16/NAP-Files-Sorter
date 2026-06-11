@@ -2,11 +2,11 @@
 
 NAP Files-Sorter organiza automaticamente una carpeta elegida por el usuario, normalmente Descargas. Corre en segundo plano, usa reglas locales y LLM (Groq como proveedor principal, Gemini como respaldo) cuando hace falta, y mueve los archivos a carpetas ordenadas sin que el usuario tenga que editar configuraciones.
 
-Version actual: `1.0.0`.
+Version actual: `1.1.0` (ver [CHANGELOG.md](CHANGELOG.md)).
 
 ## Para Usuarios
 
-1. Descarga `nap_v1.0.0.zip` desde [Releases](https://github.com/Nicand16/Files-Sorter/releases/latest).
+1. Descarga `nap_v1.1.0.zip` desde [Releases](https://github.com/Nicand16/Files-Sorter/releases/latest).
 2. Extrae el zip completo.
 3. Ejecuta `Install.bat`.
 4. Selecciona la carpeta a organizar y pega tu API key de Groq (obligatoria) y opcionalmente la de Gemini.
@@ -85,5 +85,5 @@ python -m PyInstaller --clean --noconfirm NAPMonitor.spec
 Release:
 
 ```powershell
-Compress-Archive -Path "release\nap_v1.0.0\*" -DestinationPath "nap_v1.0.0.zip" -Force
+Compress-Archive -Path "release\nap_v1.1.0\*" -DestinationPath "nap_v1.1.0.zip" -Force
 ```

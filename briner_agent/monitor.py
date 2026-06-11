@@ -52,7 +52,7 @@ def _make_tray_image() -> Image.Image:
 
 _QUERY_EVENTS = """
 SELECT
-    strftime('%H:%M:%S', ce.timestamp)  AS hora,
+    strftime('%H:%M:%S', ce.timestamp, 'localtime')  AS hora,
     COALESCE(f.filename, ce.old_path)   AS archivo,
     COALESCE(ce.category, ce.action)    AS categoria,
     COALESCE(ce.decision_source, '')    AS fuente,
@@ -229,17 +229,20 @@ class NAPMonitorApp:
             try:
                 payload = _json.loads(sys_event["reason"])
                 etype = payload.get("type", "unknown")
+                provider = str(payload.get("provider", "LLM")).capitalize()
                 recovery_s = float(payload.get("recovery_seconds", 60))
-                event_ts = _dt.datetime.fromisoformat(sys_event["timestamp"])
-                elapsed = (_dt.datetime.now() - event_ts).total_seconds()
+                # SQLite CURRENT_TIMESTAMP es UTC: comparar contra UTC para no
+                # inflar el tiempo restante con el offset de la zona horaria local.
+                event_ts = _dt.datetime.fromisoformat(sys_event["timestamp"]).replace(tzinfo=_dt.timezone.utc)
+                elapsed = (_dt.datetime.now(_dt.timezone.utc) - event_ts).total_seconds()
                 remaining = max(0, recovery_s - elapsed)
                 if remaining > 0:
                     circuit_active = True
                     if etype == "rate_limit":
                         circuit_is_ratelimit = True
-                        circuit_msg = f"Cuota de Gemini excedida — reintentando en ~{int(remaining)}s automáticamente"
+                        circuit_msg = f"Cuota de {provider} excedida — reintentando en ~{int(remaining)}s automáticamente"
                     else:
-                        circuit_msg = "API key inválida — ve a Bandeja del sistema → Cambiar API key"
+                        circuit_msg = f"API key de {provider} inválida — usa los botones 🔑 para cambiarla"
             except Exception:
                 pass
 

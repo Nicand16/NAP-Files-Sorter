@@ -38,3 +38,11 @@ CREATE TABLE IF NOT EXISTS classification_events (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
+
+-- Indices: get_pending_files filtra por status en cada ciclo y NAPMonitor
+-- ordena classification_events por timestamp cada 3s. Con carpetas de 70k+
+-- archivos, sin indices ambas consultas escanean la tabla completa.
+CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+CREATE INDEX IF NOT EXISTS idx_class_events_timestamp ON classification_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_class_events_file_id ON classification_events(file_id);
+CREATE INDEX IF NOT EXISTS idx_actions_log_file_id ON actions_log(file_id);

@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import yaml
@@ -67,7 +68,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOG_DIR / "nap.log", encoding="utf-8"),
+        # Rotacion: el servicio corre 24/7; sin tope el log creceria sin limite.
+        RotatingFileHandler(
+            LOG_DIR / "nap.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        ),
     ],
 )
 logger = logging.getLogger("NAPMain")

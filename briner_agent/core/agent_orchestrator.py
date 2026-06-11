@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
@@ -10,7 +11,7 @@ try:
 except ImportError:
     create_react_agent = None
 
-from core.llm_engine import get_llm, get_llm_providers
+from core.llm_engine import get_llm_providers
 from infra.metrics import (
     M_CACHE_HITS,
     M_CACHE_MISSES,
@@ -22,7 +23,6 @@ from infra.metrics import (
     M_LLM_FAILURES_TOTAL,
     M_PHASE1_DURATION,
     M_PHASE2_DURATION,
-    M_PHASE3_DURATION,
     metrics,
 )
 from modules.crud_executor import consume_thread_moves, move_file_secure, move_folder_secure
@@ -148,8 +148,10 @@ class NAPOrchestrator:
         from runtime.circuit_breaker import CircuitBreaker
         proc = config.get("processing", {})
         cb_threshold = int(proc.get("circuit_breaker_threshold", 3))
-        self._groq_circuit = CircuitBreaker("groq", cb_threshold, float(proc.get("groq_circuit_recovery_seconds", 65.0)))
-        self._gemini_circuit = CircuitBreaker("gemini", cb_threshold, float(proc.get("gemini_circuit_recovery_seconds", 65.0)))
+        self._groq_base_recovery = float(proc.get("groq_circuit_recovery_seconds", 65.0))
+        self._gemini_base_recovery = float(proc.get("gemini_circuit_recovery_seconds", 65.0))
+        self._groq_circuit = CircuitBreaker("groq", cb_threshold, self._groq_base_recovery)
+        self._gemini_circuit = CircuitBreaker("gemini", cb_threshold, self._gemini_base_recovery)
         self._groq_daily_recovery = float(proc.get("groq_daily_circuit_recovery_seconds", 3600.0))
         self._gemini_daily_recovery = float(proc.get("gemini_daily_circuit_recovery_seconds", 3600.0))
         self._circuit = self._groq_circuit  # backward compat alias
@@ -222,6 +224,8 @@ class NAPOrchestrator:
             etype = "rate_limit"
             if _is_daily_limit_error(message):
                 circuit.recovery_seconds = self._groq_daily_recovery if provider == "groq" else self._gemini_daily_recovery
+            else:
+                circuit.recovery_seconds = self._groq_base_recovery if provider == "groq" else self._gemini_base_recovery
         elif _is_api_key_error(message):
             etype = "auth_error"
         self._circuit_error_type = etype
@@ -253,6 +257,7 @@ class NAPOrchestrator:
     def _record_api_success(self, provider: str = "groq"):
         self._consecutive_api_failures = 0
         circuit = self._groq_circuit if provider == "groq" else self._gemini_circuit
+        circuit.recovery_seconds = self._groq_base_recovery if provider == "groq" else self._gemini_base_recovery
         prev_type = self._circuit_error_type
         circuit.record_success()
         if prev_type is not None:
@@ -1337,8 +1342,7 @@ REGLAS DE OPERACION:
         )
 
         # Fases 2+3: lote LLM con fallback ReAct
-        _phase23_start = __import__("time").perf_counter()
-        _time = __import__("time")
+        _phase23_start = time.perf_counter()
         prefer_bulk = len(ambiguous) > self.llm_individual_threshold
         for i in range(0, len(ambiguous), self.llm_batch_size):
             chunk = ambiguous[i : i + self.llm_batch_size]
@@ -1356,7 +1360,7 @@ REGLAS DE OPERACION:
             metrics.inc(M_FILES_ERRORS, result["errors"] - _chunk_errors_before)
             # Pace API calls — Groq free tier: 30 req/min; Gemini free tier: 15 req/min
             if i + self.llm_batch_size < len(ambiguous):
-                _time.sleep(2)
-        metrics.record(M_PHASE2_DURATION, __import__("time").perf_counter() - _phase23_start)
+                time.sleep(2)
+        metrics.record(M_PHASE2_DURATION, time.perf_counter() - _phase23_start)
 
         return result
