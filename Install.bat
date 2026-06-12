@@ -26,8 +26,8 @@ if not exist "%NAP_EXE%" (
     exit /b 1
 )
 
-if not exist "%ROOT%NAPSorter\_internal\python314.dll" (
-    echo  ERROR: Archivos internos faltantes ^(_internal\python314.dll^).
+if not exist "%ROOT%NAPSorter\_internal\python3*.dll" (
+    echo  ERROR: Archivos internos faltantes ^(_internal\python3x.dll^).
     echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
     echo.
     pause
