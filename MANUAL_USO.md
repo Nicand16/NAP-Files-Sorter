@@ -2,7 +2,7 @@
 
 NAP Files-Sorter organiza automaticamente los archivos de una carpeta elegida por el usuario. La instalacion normal no requiere Python ni comandos: solo extraer el zip, ejecutar `Install.bat`, elegir carpeta y pegar la API key de Groq.
 
-Version: `1.0.0`.
+Version: `1.2.0`.
 
 ## Instalacion
 
@@ -10,7 +10,7 @@ Version: `1.0.0`.
 
 - Windows 10 u 11.
 - API key gratuita de Groq: <https://console.groq.com> (14.400 solicitudes/dia).
-- El zip de release completo: `nap_v1.0.0.zip`.
+- El zip de release completo: `nap_v1.2.0.zip`.
 
 ### Pasos
 
@@ -88,17 +88,13 @@ Menu de clic derecho:
 
 ## NAP Monitor
 
-NAP Monitor permite manejar la app sin comandos:
+NAP Monitor permite manejar la app sin comandos. La ventana tiene:
 
-- Ver pendientes, procesados y errores.
-- Revisar los ultimos eventos.
-- Forzar escaneo.
-- Cambiar carpeta monitoreada.
-- Pausar o reanudar.
-- Deshacer ultimo movimiento.
-- Abrir `Documentos por Revisar`.
-- Abrir logs.
-- Cambiar API key de Groq o Gemini.
+- **Encabezado**: estado actual (verde activo, ambar cuota/pausa, rojo error) y la carpeta que se esta organizando.
+- **Tarjetas**: pendientes, procesados, errores y hora del ultimo evento.
+- **Barra de acciones**: forzar escaneo, pausar/reanudar, deshacer ultimo, cambiar carpeta y abrir `Documentos por Revisar`.
+- **Buscador**: filtra el historial en vivo mientras escribes (por archivo, categoria, fuente o razon).
+- **Menu ⚙ Configuracion**: cambiar API key de Groq o Gemini, abrir logs y abrir la carpeta de datos.
 
 Cuando cambias la API key desde Monitor, NAPBackground la recarga automaticamente mediante IPC. No hace falta reiniciar.
 
@@ -115,13 +111,21 @@ Tambien puedes hacerlo desde el icono de bandeja con `Cambiar carpeta...`.
 
 Si la carpeta anterior deja de existir, NAP Files-Sorter se pausa y espera a que configures una carpeta valida.
 
+### Carpetas no permitidas
+
+Para proteger tu equipo, NAP Files-Sorter rechaza carpetas peligrosas como workspace:
+
+- La raiz de una unidad (`C:\`, `D:\`).
+- Tu perfil de usuario completo (`C:\Users\tu_usuario`) — elige una subcarpeta como Descargas.
+- Carpetas del sistema (`Windows`, `Program Files`, `AppData`).
+
 ## Cambiar API Key
 
 Opcion recomendada:
 
-1. Abre NAP Monitor o el menu de bandeja.
-2. Pulsa `API Groq` o `API Gemini`.
-3. Pega la nueva clave.
+1. Abre NAP Monitor y entra al menu `⚙ Configuracion` (o usa el menu de bandeja).
+2. Elige `Cambiar API key de Groq` o `de Gemini`.
+3. Pega la nueva clave. NAP valida el formato y avisa si no parece correcta.
 4. NAP Files-Sorter guarda `.env`, reinicia el cliente LLM y limpia el circuit breaker.
 
 ## Pausar, Reanudar y Forzar Escaneo
@@ -161,6 +165,14 @@ Haz clic en la flecha de iconos ocultos junto al reloj de Windows. Si no aparece
 
 Es normal en el primer arranque. NAP Files-Sorter procesa por lotes hasta ponerse al dia.
 
+### Un archivo recien descargado no se movio
+
+NAP Files-Sorter espera unos segundos antes de tocar archivos recien modificados, para no mover descargas o copias en curso. Se registran en el siguiente ciclo (o con `Forzar escaneo`).
+
+### Abri NAP dos veces
+
+No pasa nada: la segunda instancia detecta que ya hay una corriendo y se cierra sola. Solo un proceso organiza la carpeta a la vez.
+
 ### Groq dice cuota excedida
 
 NAP Files-Sorter abre circuit breaker, conmuta automaticamente a Gemini (si esta configurado) y reintenta. Puedes esperar o cambiar API key.
@@ -188,6 +200,7 @@ Mueve el archivo manualmente a donde corresponda.
 Desde `NAPSorter\NAPSorter.exe`:
 
 ```powershell
+.\NAPSorter.exe --version
 .\NAPSorter.exe --once
 .\NAPSorter.exe --once --dry-run
 .\NAPSorter.exe --metrics

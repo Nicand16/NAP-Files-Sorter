@@ -1,6 +1,6 @@
 app:
   name: "NAP Files-Sorter"
-  version: "1.1.0"
+  version: "1.2.0"
   description: "AI Autonomous Agent for File Management"
 
 monitoring:
@@ -11,8 +11,11 @@ monitoring:
   recursive: false
   debounce_seconds: 2
   ignore_existing_categories: true
+  # No registrar archivos modificados hace menos de N segundos: pueden ser
+  # descargas o copias en curso que aun no usan extension temporal.
+  min_file_age_seconds: 15
   ignored_filenames: [".keep", "desktop.ini"]
-  ignored_patterns: ["~$*", "*.tmp", "*.temp", "*.crdownload", "*.part"]
+  ignored_patterns: ["~$*", "*.tmp", "*.temp", "*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload"]
   destination_aliases:
     "Universidad y Estudio": "1. Universidad y Estudio"
     "Software y Herramientas": "2. Software y Herramientas"

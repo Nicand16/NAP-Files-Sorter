@@ -26,6 +26,9 @@ briner_agent/logs/
 briner_agent/**/logs/
 briner_agent/**/*.db
 briner_agent/**/user_settings.json
+briner_agent/.nap.lock
+briner_agent/.force_scan
+briner_agent/commands/
 
 # Workspace de usuario
 briner_agent/workspace/*

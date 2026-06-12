@@ -10,18 +10,17 @@ from runtime.commands import enqueue_command
 logger = logging.getLogger(__name__)
 
 
+from branding import ACCENT, GREEN, RED, make_logo_image
+
+
 def _make_icon(color: tuple):
-    from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill=(*color, 255))
-    return img
+    return make_logo_image(color)
 
 
 class NAPTrayIcon:
-    _GREEN = (34, 197, 94)
-    _BLUE = (59, 130, 246)
-    _RED = (239, 68, 68)
+    _GREEN = GREEN
+    _BLUE = ACCENT
+    _RED = RED
 
     def __init__(self, workspace_dir: Path, appdata_dir: Path, stop_event: threading.Event, force_scan_event: threading.Event, on_api_key_changed=None):
         self.workspace_dir = Path(workspace_dir)
@@ -294,11 +293,14 @@ class NAPTrayIcon:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
                 capture_output=True, text=True, timeout=60,
             )
-            new_key = result.stdout.strip()
+            new_key = result.stdout.strip().strip('"').strip("'")
         except Exception as exc:
             logger.warning("Error mostrando dialogo de API key: %s", exc)
             return
         if not new_key:
+            return
+        if len(new_key) < 20 or " " in new_key:
+            self._notify("NAP Files-Sorter", "La API key ingresada no parece valida (muy corta o con espacios). No se guardo.")
             return
         env_path = self.appdata_dir / ".env"
         try:

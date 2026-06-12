@@ -98,6 +98,7 @@ echo  Obtenla en: https://console.groq.com
 echo.
 set /p "GROQ_KEY=  Pega tu API key aqui: "
 set "GROQ_KEY=!GROQ_KEY: =!"
+set GROQ_KEY=!GROQ_KEY:"=!
 
 if "!GROQ_KEY!"=="" (
     echo.
@@ -105,6 +106,13 @@ if "!GROQ_KEY!"=="" (
     echo.
     pause
     exit /b 1
+)
+
+if /i not "!GROQ_KEY:~0,4!"=="gsk_" (
+    echo.
+    echo  AVISO: las API keys de Groq normalmente empiezan con "gsk_".
+    echo  Verifica en https://console.groq.com que copiaste la key completa.
+    echo  Puedes cambiarla despues desde NAP Monitor ^(boton de Configuracion^).
 )
 echo.
 

@@ -187,7 +187,7 @@ class PeriodicScannerTests(unittest.TestCase):
             (root / "~$lock.docx").write_text("ignored", encoding="utf-8")
             db = FakeDb()
 
-            count = scan_directory_once(root, db, {})
+            count = scan_directory_once(root, db, {"monitoring": {"min_file_age_seconds": 0}})
 
             self.assertEqual(count, 1)
             self.assertEqual(db.registered[0][0], "document.txt")
@@ -207,6 +207,7 @@ class PeriodicScannerTests(unittest.TestCase):
                 {
                     "monitoring": {
                         "recursive": True,
+                        "min_file_age_seconds": 0,
                         "destination_aliases": {"Universidad y Estudio": "1. Universidad y Estudio"},
                     }
                 },

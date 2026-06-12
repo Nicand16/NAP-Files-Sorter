@@ -1,12 +1,16 @@
 """
-nap_agent/monitor.py
+briner_agent/monitor.py
 
-Standalone monitoring window for NAP Files-Sorter.
-Reads from the shared SQLite database and shows real-time activity.
-Minimizing hides the window to the system tray; force-scan button signals
-NAPBackground via a sentinel file to run a classification cycle immediately.
+Ventana de monitoreo de NAP Files-Sorter (NAPMonitor.exe).
+
+Lee la base SQLite compartida en modo solo lectura y muestra la actividad en
+tiempo real con una interfaz moderna: encabezado con estado, tarjetas de
+metricas, barra de acciones, busqueda en vivo y tabla de eventos.
+Minimizar oculta la ventana a la bandeja del sistema; las acciones se envian a
+NAPBackground mediante la cola de comandos (commands/*.json).
 """
 
+import datetime as _dt
 import json
 import os
 import sqlite3
@@ -15,15 +19,23 @@ import threading
 import tkinter as tk
 import tkinter.filedialog
 import tkinter.messagebox
+import tkinter.simpledialog
 from pathlib import Path
 from tkinter import ttk
 
-from runtime.commands import enqueue_command
-
 import pystray
-from PIL import Image, ImageDraw
+from PIL import ImageTk
 
 # --- Path resolution (mirrors main.py logic) ---
+CODE_DIR = Path(__file__).resolve().parent
+if str(CODE_DIR) not in sys.path:
+    sys.path.insert(0, str(CODE_DIR))
+
+from branding import ACCENT, AMBER, GREEN, RED, make_logo_image
+from core.settings_manager import validate_watch_directory
+from runtime.commands import enqueue_command
+from version import APP_NAME, __version__
+
 IS_FROZEN = getattr(sys, "frozen", False)
 if IS_FROZEN:
     _appdata = os.environ.get("APPDATA", "")
@@ -33,8 +45,8 @@ if IS_FROZEN:
         else Path.home() / "AppData" / "Roaming" / "NAP Files-Sorter"
     )
 else:
-    # Dev mode: APPDATA_DIR == CODE_DIR == nap_agent/ (mirrors main.py)
-    _app_dir = Path(__file__).resolve().parent
+    # Dev mode: APPDATA_DIR == CODE_DIR == briner_agent/ (mirrors main.py)
+    _app_dir = CODE_DIR
 
 DB_PATH = _app_dir / "nap.db" if IS_FROZEN else _app_dir / "db" / "nap.db"
 SETTINGS_PATH = _app_dir / "user_settings.json"
@@ -42,13 +54,25 @@ LOGS_DIR = _app_dir / "logs"
 
 _SENTINEL = _app_dir / ".force_scan"  # inter-process signal file
 
+# --- Paleta (hex derivada de branding) ---
 
-def _make_tray_image() -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill=(59, 130, 246, 255))  # blue circle
-    return img
 
+def _hex(rgb: tuple) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+C_BG = "#eef2f7"        # fondo general
+C_CARD = "#ffffff"      # tarjetas y tabla
+C_HEADER = "#1e293b"    # barra superior
+C_HEADER_TEXT = "#f8fafc"
+C_HEADER_MUTED = "#94a3b8"
+C_TEXT = "#0f172a"
+C_MUTED = "#64748b"
+C_STRIPE = "#f6f8fb"
+C_ACCENT = _hex(ACCENT)
+C_GREEN = _hex(GREEN)
+C_RED = _hex(RED)
+C_AMBER = _hex(AMBER)
 
 _QUERY_EVENTS = """
 SELECT
@@ -77,6 +101,16 @@ LIMIT 1
 _QUERY_COUNTS = "SELECT status, COUNT(*) FROM files GROUP BY status"
 
 _REFRESH_MS = 3000
+
+_SOURCE_LABELS = {
+    "rule": "Regla",
+    "metadata_rule": "Metadatos",
+    "cache": "Cache",
+    "llm_batch": "IA (lote)",
+    "llm_individual": "IA",
+    "llm": "IA",
+    "system": "Sistema",
+}
 
 
 def _read_workspace() -> str:
@@ -108,117 +142,234 @@ def _fetch_data():
 class NAPMonitorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        workspace = _read_workspace()
-        title = f"NAP Monitor — {workspace}" if workspace else "NAP Monitor"
-        root.title(title)
-        root.minsize(640, 400)
-        root.geometry("940x540")
+        root.title(f"NAP Monitor · v{__version__}")
+        root.minsize(820, 480)
+        root.geometry("1020x600")
+        root.configure(bg=C_BG)
+
+        # Icono de ventana (misma marca que la bandeja)
+        try:
+            self._window_icon = ImageTk.PhotoImage(make_logo_image(ACCENT, 32))
+            root.iconphoto(True, self._window_icon)
+        except Exception:
+            self._window_icon = None
+
         self._tray: pystray.Icon | None = None
         self._paused = False
+        self._all_rows: list[dict] = []
+        self._filter_var = tk.StringVar()
+        self._filter_var.trace_add("write", lambda *_: self._render_rows())
+
+        self._setup_style()
         root.bind('<Unmap>', self._on_minimize)
         root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._build_ui()
         self._refresh()
 
+    # ------------------------------------------------------------------ #
+    # Construccion de la interfaz                                         #
+    # ------------------------------------------------------------------ #
+
+    def _setup_style(self):
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(
+            "Treeview",
+            rowheight=26,
+            font=("Segoe UI", 9),
+            background=C_CARD,
+            fieldbackground=C_CARD,
+            foreground=C_TEXT,
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=("Segoe UI", 9, "bold"),
+            background="#e2e8f0",
+            foreground=C_HEADER,
+            relief="flat",
+            padding=(8, 6),
+        )
+        style.map("Treeview.Heading", background=[("active", "#cbd5e1")])
+        style.map(
+            "Treeview",
+            background=[("selected", "#bfdbfe")],
+            foreground=[("selected", C_TEXT)],
+        )
+        style.configure("Toolbar.TButton", font=("Segoe UI", 9), padding=(12, 6))
+        style.configure("Toolbar.TMenubutton", font=("Segoe UI", 9), padding=(12, 6))
+        style.configure("Search.TEntry", padding=(8, 5))
+
     def _build_ui(self):
-        top = tk.Frame(self.root, pady=6, padx=10)
-        top.pack(fill=tk.X)
+        self._build_header()
+        self._build_cards()
+        self._build_toolbar()
+        self._build_table()
+        self._build_footer()
 
-        self._status_dot = tk.Label(top, text="●", font=("Segoe UI", 14), fg="gray")
-        self._status_dot.pack(side=tk.LEFT)
+    def _build_header(self):
+        header = tk.Frame(self.root, bg=C_HEADER, padx=16, pady=12)
+        header.pack(fill=tk.X)
 
-        self._status_label = tk.Label(top, text="Conectando...", font=("Segoe UI", 10))
-        self._status_label.pack(side=tk.LEFT, padx=6)
+        left = tk.Frame(header, bg=C_HEADER)
+        left.pack(side=tk.LEFT)
+        tk.Label(
+            left, text=APP_NAME, font=("Segoe UI", 14, "bold"),
+            bg=C_HEADER, fg=C_HEADER_TEXT,
+        ).pack(anchor=tk.W)
+        self._workspace_label = tk.Label(
+            left, text="", font=("Segoe UI", 9),
+            bg=C_HEADER, fg=C_HEADER_MUTED,
+        )
+        self._workspace_label.pack(anchor=tk.W)
 
-        self._counters_label = tk.Label(top, text="", font=("Segoe UI", 10))
-        self._counters_label.pack(side=tk.LEFT, padx=14)
+        right = tk.Frame(header, bg=C_HEADER)
+        right.pack(side=tk.RIGHT)
+        self._status_dot = tk.Label(right, text="●", font=("Segoe UI", 14), bg=C_HEADER, fg=C_HEADER_MUTED)
+        self._status_dot.pack(side=tk.LEFT, padx=(0, 6))
+        self._status_label = tk.Label(
+            right, text="Conectando...", font=("Segoe UI", 10),
+            bg=C_HEADER, fg=C_HEADER_TEXT,
+        )
+        self._status_label.pack(side=tk.LEFT)
 
-        btn_frame = tk.Frame(top)
-        btn_frame.pack(side=tk.RIGHT)
-        tk.Button(btn_frame, text="Cambiar carpeta", command=self._change_workspace).pack(side=tk.LEFT, padx=4)
-        self._pause_button = tk.Button(btn_frame, text="Pausar", command=self._toggle_pause)
-        self._pause_button.pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Deshacer", command=self._undo_last).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Revisar varios", command=self._open_review_folder).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="⚡ Forzar escaneo", command=self._force_scan).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="↺ Actualizar ahora", command=self._refresh).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Abrir logs", command=self._open_logs).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="🔑 API Groq", command=self._change_groq_key).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="🔑 API Gemini", command=self._change_gemini_key).pack(side=tk.LEFT, padx=4)
+    def _make_card(self, parent, caption: str, color: str):
+        card = tk.Frame(parent, bg=C_CARD, padx=16, pady=10,
+                        highlightbackground="#dbe2ea", highlightthickness=1)
+        value = tk.Label(card, text="–", font=("Segoe UI", 17, "bold"), bg=C_CARD, fg=color)
+        value.pack(anchor=tk.W)
+        tk.Label(card, text=caption, font=("Segoe UI", 9), bg=C_CARD, fg=C_MUTED).pack(anchor=tk.W)
+        return card, value
 
-        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X)
+    def _build_cards(self):
+        cards = tk.Frame(self.root, bg=C_BG, padx=16, pady=12)
+        cards.pack(fill=tk.X)
+        for index in range(4):
+            cards.columnconfigure(index, weight=1, uniform="cards")
 
-        frame = tk.Frame(self.root)
-        frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        card, self._card_pending = self._make_card(cards, "Pendientes", C_ACCENT)
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        card, self._card_processed = self._make_card(cards, "Procesados", C_GREEN)
+        card.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+        card, self._card_errors = self._make_card(cards, "Errores", C_RED)
+        card.grid(row=0, column=2, sticky="nsew", padx=(0, 10))
+        card, self._card_last = self._make_card(cards, "Ultimo evento", C_MUTED)
+        card.grid(row=0, column=3, sticky="nsew")
+
+    def _build_toolbar(self):
+        bar = tk.Frame(self.root, bg=C_BG, padx=16)
+        bar.pack(fill=tk.X)
+
+        ttk.Button(bar, text="⚡ Forzar escaneo", style="Toolbar.TButton",
+                   command=self._force_scan).pack(side=tk.LEFT, padx=(0, 6))
+        self._pause_button = ttk.Button(bar, text="⏸ Pausar", style="Toolbar.TButton",
+                                        command=self._toggle_pause)
+        self._pause_button.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(bar, text="↩ Deshacer ultimo", style="Toolbar.TButton",
+                   command=self._undo_last).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(bar, text="📂 Cambiar carpeta", style="Toolbar.TButton",
+                   command=self._change_workspace).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(bar, text="🗂 Revisar 'Varios'", style="Toolbar.TButton",
+                   command=self._open_review_folder).pack(side=tk.LEFT)
+
+        config_btn = ttk.Menubutton(bar, text="⚙ Configuracion", style="Toolbar.TMenubutton")
+        menu = tk.Menu(config_btn, tearoff=0, font=("Segoe UI", 9))
+        menu.add_command(label="🔑 Cambiar API key de Groq", command=self._change_groq_key)
+        menu.add_command(label="🔑 Cambiar API key de Gemini (respaldo)", command=self._change_gemini_key)
+        menu.add_separator()
+        menu.add_command(label="📄 Abrir logs", command=self._open_logs)
+        menu.add_command(label="📁 Abrir carpeta de datos", command=self._open_appdata)
+        config_btn["menu"] = menu
+        config_btn.pack(side=tk.RIGHT)
+
+    def _build_table(self):
+        container = tk.Frame(self.root, bg=C_BG, padx=16, pady=10)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        search_row = tk.Frame(container, bg=C_BG)
+        search_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(search_row, text="Actividad reciente", font=("Segoe UI", 11, "bold"),
+                 bg=C_BG, fg=C_TEXT).pack(side=tk.LEFT)
+        search = ttk.Entry(search_row, textvariable=self._filter_var,
+                           style="Search.TEntry", width=32)
+        search.pack(side=tk.RIGHT)
+        tk.Label(search_row, text="🔎", font=("Segoe UI", 10), bg=C_BG, fg=C_MUTED).pack(side=tk.RIGHT, padx=(0, 4))
+
+        frame = tk.Frame(container, bg=C_CARD, highlightbackground="#dbe2ea", highlightthickness=1)
+        frame.pack(fill=tk.BOTH, expand=True)
 
         cols = ("hora", "archivo", "categoria", "fuente", "accion", "razon")
-        headings = ("Hora", "Archivo", "Categoría", "Fuente", "Acción", "Razón")
-        widths = (70, 230, 190, 80, 70, 180)
+        headings = ("Hora", "Archivo", "Categoria", "Fuente", "Accion", "Razon")
+        widths = (70, 250, 200, 80, 70, 220)
 
         self._tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
         for col, heading, width in zip(cols, headings, widths):
             self._tree.heading(col, text=heading)
-            self._tree.column(col, width=width, minwidth=40, anchor=tk.W)
+            self._tree.column(col, width=width, minwidth=50, anchor=tk.W)
+
+        self._tree.tag_configure("stripe", background=C_STRIPE)
+        self._tree.tag_configure("error_row", foreground=C_RED)
+        self._tree.tag_configure("undo_row", foreground=C_AMBER)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._tree.pack(fill=tk.BOTH, expand=True)
 
-        self._info_label = tk.Label(
-            self.root,
-            text=f"DB: {DB_PATH}   |   actualización cada {_REFRESH_MS // 1000}s",
-            font=("Segoe UI", 8),
-            fg="gray",
-            anchor=tk.W,
-            padx=6,
-            pady=2,
+    def _build_footer(self):
+        footer = tk.Frame(self.root, bg="#e2e8f0", padx=12, pady=4)
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        self._footer_label = tk.Label(
+            footer,
+            text=f"{APP_NAME} v{__version__}   ·   DB: {DB_PATH}",
+            font=("Segoe UI", 8), bg="#e2e8f0", fg=C_MUTED, anchor=tk.W,
         )
-        self._info_label.pack(fill=tk.X, side=tk.BOTTOM)
+        self._footer_label.pack(side=tk.LEFT)
+
+    # ------------------------------------------------------------------ #
+    # Refresco de datos                                                   #
+    # ------------------------------------------------------------------ #
 
     def _refresh(self):
         rows, counts, sys_event = _fetch_data()
         self._update_ui(rows, counts, sys_event)
         self.root.after(_REFRESH_MS, self._refresh)
 
-    def _update_ui(self, rows, counts, sys_event):
-        import json as _json
-        import datetime as _dt
+    def _set_status(self, color: str, text: str):
+        self._status_dot.config(fg=color)
+        self._status_label.config(text=text)
 
-        for item in self._tree.get_children():
-            self._tree.delete(item)
+    def _update_ui(self, rows, counts, sys_event):
+        workspace = _read_workspace()
+        self._workspace_label.config(text=f"Organizando: {workspace}" if workspace else "Sin carpeta configurada")
 
         if rows is None:
-            self._status_dot.config(fg="gray")
             if not DB_PATH.exists():
-                self._status_label.config(text="NAP Files-Sorter no está configurado todavía")
+                self._set_status(C_HEADER_MUTED, "NAP Files-Sorter no esta configurado todavia")
+                self._all_rows = []
+                self._render_rows()
             else:
-                self._status_label.config(text="Error leyendo la base de datos")
-            self._counters_label.config(text="")
+                # Error transitorio (DB ocupada): conservar lo ultimo mostrado.
+                self._set_status(C_AMBER, "No se pudo leer la base de datos (reintentando...)")
             return
 
-        has_errors = False
-        for row in rows:
-            values = (
-                row["hora"] or "",
-                row["archivo"] or "",
-                row["categoria"] or "",
-                row["fuente"] or "",
-                row["accion"] or "",
-                row["razon"] or "",
-            )
-            tag = "error_row" if row["accion"] == "error" else ""
-            self._tree.insert("", tk.END, values=values, tags=(tag,))
-            if row["accion"] == "error":
-                has_errors = True
-
-        self._tree.tag_configure("error_row", foreground="#dc2626")
+        self._all_rows = [dict(row) for row in rows]
+        self._render_rows()
 
         pending = counts.get("pending", 0)
         processed = counts.get("processed", 0)
         errors = counts.get("error", 0)
-        self._counters_label.config(
-            text=f"Pendientes: {pending}   Procesados: {processed}   Errores: {errors}"
+        self._card_pending.config(text=f"{pending:,}")
+        self._card_processed.config(text=f"{processed:,}")
+        self._card_errors.config(text=f"{errors:,}")
+        self._card_last.config(text=rows[0]["hora"] if rows else "—")
+
+        now_label = _dt.datetime.now().strftime("%H:%M:%S")
+        self._footer_label.config(
+            text=f"{APP_NAME} v{__version__}   ·   DB: {DB_PATH}   ·   Actualizado: {now_label}"
         )
 
         # --- Circuit breaker state (from system events in DB) ---
@@ -227,7 +378,7 @@ class NAPMonitorApp:
         circuit_is_ratelimit = False
         if sys_event and sys_event["action"] == "circuit_open":
             try:
-                payload = _json.loads(sys_event["reason"])
+                payload = json.loads(sys_event["reason"])
                 etype = payload.get("type", "unknown")
                 provider = str(payload.get("provider", "LLM")).capitalize()
                 recovery_s = float(payload.get("recovery_seconds", 60))
@@ -240,47 +391,89 @@ class NAPMonitorApp:
                     circuit_active = True
                     if etype == "rate_limit":
                         circuit_is_ratelimit = True
-                        circuit_msg = f"Cuota de {provider} excedida — reintentando en ~{int(remaining)}s automáticamente"
+                        circuit_msg = f"Cuota de {provider} excedida — reintento automatico en ~{int(remaining)}s"
                     else:
-                        circuit_msg = f"API key de {provider} inválida — usa los botones 🔑 para cambiarla"
+                        circuit_msg = f"API key de {provider} invalida — cambiala en ⚙ Configuracion"
             except Exception:
                 pass
 
-        # --- Specific error reason from file events ---
-        error_reasons = [row["razon"] for row in rows if row["accion"] == "error" and row["razon"]]
+        has_errors = any(row["accion"] == "error" for row in self._all_rows)
+        error_reasons = [row["razon"] for row in self._all_rows if row["accion"] == "error" and row["razon"]]
 
         if circuit_active and circuit_is_ratelimit:
-            self._status_dot.config(fg="#f59e0b")  # yellow = rate limit, recovering
-            self._status_label.config(text=circuit_msg)
+            self._set_status(C_AMBER, circuit_msg)
         elif circuit_active:
-            self._status_dot.config(fg="#dc2626")
-            self._status_label.config(text=circuit_msg)
+            self._set_status(C_RED, circuit_msg)
         elif has_errors or errors > 0:
-            self._status_dot.config(fg="#dc2626")
-            detail = f": {error_reasons[0][:80]}" if error_reasons else ""
-            self._status_label.config(text=f"Hay errores{detail}")
+            detail = f": {error_reasons[0][:70]}" if error_reasons else ""
+            self._set_status(C_RED, f"Hay errores{detail}")
         elif rows:
-            self._status_dot.config(fg="#22c55e")
-            self._status_label.config(text="Activo")
+            self._set_status(C_GREEN, "Activo")
         else:
-            self._status_dot.config(fg="gray")
-            self._status_label.config(text="Sin actividad reciente")
+            self._set_status(C_HEADER_MUTED, "Sin actividad reciente")
+
+    def _render_rows(self):
+        for item in self._tree.get_children():
+            self._tree.delete(item)
+
+        needle = self._filter_var.get().strip().casefold()
+        visible_index = 0
+        for row in self._all_rows:
+            values = (
+                row.get("hora") or "",
+                row.get("archivo") or "",
+                row.get("categoria") or "",
+                _SOURCE_LABELS.get(row.get("fuente") or "", row.get("fuente") or ""),
+                row.get("accion") or "",
+                row.get("razon") or "",
+            )
+            if needle and not any(needle in str(value).casefold() for value in values):
+                continue
+            tags = []
+            if visible_index % 2 == 1:
+                tags.append("stripe")
+            if row.get("accion") == "error":
+                tags.append("error_row")
+            elif row.get("accion") == "undo":
+                tags.append("undo_row")
+            self._tree.insert("", tk.END, values=values, tags=tuple(tags))
+            visible_index += 1
+
+    # ------------------------------------------------------------------ #
+    # Acciones                                                            #
+    # ------------------------------------------------------------------ #
 
     def _force_scan(self):
         try:
             enqueue_command(_app_dir, "force_scan")
             _SENTINEL.touch()
-            self._status_label.config(text="Escaneo solicitado — NAP Files-Sorter procesará en breve")
+            self._set_status(C_ACCENT, "Escaneo solicitado — procesara en breve")
         except Exception as exc:
             tkinter.messagebox.showerror("NAP Monitor", f"No se pudo solicitar escaneo:\n{exc}")
 
     def _change_workspace(self):
-        folder = tkinter.filedialog.askdirectory(title="Selecciona la carpeta que NAP Files-Sorter debe organizar")
+        folder = tkinter.filedialog.askdirectory(
+            title="Selecciona la carpeta que NAP Files-Sorter debe organizar"
+        )
         if not folder:
             return
         try:
-            enqueue_command(_app_dir, "change_workspace", {"workspace_dir": folder})
-            self._status_label.config(text="Cambio de carpeta solicitado. NAP Files-Sorter lo aplicara en breve.")
+            validated = validate_watch_directory(folder)
+        except ValueError as exc:
+            tkinter.messagebox.showerror("Carpeta no valida", str(exc))
+            return
+        confirmed = tkinter.messagebox.askyesno(
+            "Confirmar carpeta",
+            "NAP Files-Sorter organizara TODOS los archivos sueltos de:\n\n"
+            f"{validated}\n\n"
+            "Los movera a subcarpetas por categoria dentro de esa misma carpeta.\n"
+            "¿Quieres continuar?",
+        )
+        if not confirmed:
+            return
+        try:
+            enqueue_command(_app_dir, "change_workspace", {"workspace_dir": validated})
+            self._set_status(C_ACCENT, "Cambio de carpeta solicitado — se aplicara en breve")
         except Exception as exc:
             tkinter.messagebox.showerror("NAP Monitor", f"No se pudo cambiar la carpeta:\n{exc}")
 
@@ -289,8 +482,11 @@ class NAPMonitorApp:
         command = "pause" if self._paused else "resume"
         try:
             enqueue_command(_app_dir, command)
-            self._pause_button.config(text="Reanudar" if self._paused else "Pausar")
-            self._status_label.config(text="Organizacion pausada" if self._paused else "Organizacion reanudada")
+            self._pause_button.config(text="▶ Reanudar" if self._paused else "⏸ Pausar")
+            self._set_status(
+                C_AMBER if self._paused else C_GREEN,
+                "Organizacion pausada" if self._paused else "Organizacion reanudada",
+            )
         except Exception as exc:
             self._paused = not self._paused
             tkinter.messagebox.showerror("NAP Monitor", f"No se pudo enviar el comando:\n{exc}")
@@ -298,7 +494,7 @@ class NAPMonitorApp:
     def _undo_last(self):
         try:
             enqueue_command(_app_dir, "undo_last")
-            self._status_label.config(text="Deshacer solicitado. NAP Files-Sorter lo aplicara en breve.")
+            self._set_status(C_ACCENT, "Deshacer solicitado — se aplicara en breve")
         except Exception as exc:
             tkinter.messagebox.showerror("NAP Monitor", f"No se pudo solicitar deshacer:\n{exc}")
 
@@ -319,6 +515,10 @@ class NAPMonitorApp:
         except Exception as exc:
             tkinter.messagebox.showerror("NAP Monitor", f"No se pudo abrir la carpeta de revision:\n{exc}")
 
+    # ------------------------------------------------------------------ #
+    # API keys                                                            #
+    # ------------------------------------------------------------------ #
+
     def _update_env_key(self, env_path: Path, key_name: str, value: str):
         lines = []
         updated = False
@@ -333,52 +533,54 @@ class NAPMonitorApp:
             lines.append(f"{key_name}={value}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def _prompt_api_key(self, title: str, prompt: str) -> str:
-        import subprocess
-        ps_script = (
-            "Add-Type -AssemblyName Microsoft.VisualBasic; "
-            f"$key = [Microsoft.VisualBasic.Interaction]::InputBox('{prompt}', '{title}', ''); "
-            "Write-Output $key"
-        )
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-                capture_output=True, text=True, timeout=60,
-            )
-            return result.stdout.strip()
-        except Exception as exc:
-            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo mostrar el dialogo:\n{exc}")
+    def _ask_api_key(self, title: str, prompt: str) -> str:
+        value = tkinter.simpledialog.askstring(title, prompt, parent=self.root)
+        if value is None:
             return ""
+        return value.strip().strip('"').strip("'")
+
+    def _save_api_key(self, key_name: str, new_key: str, expected_prefix: str, provider: str) -> bool:
+        if not new_key:
+            return False
+        if len(new_key) < 20 or " " in new_key:
+            tkinter.messagebox.showerror(
+                "API key no valida",
+                f"La API key de {provider} ingresada no parece valida "
+                "(muy corta o contiene espacios). Revisa que la copiaste completa.",
+            )
+            return False
+        if expected_prefix and not new_key.startswith(expected_prefix):
+            proceed = tkinter.messagebox.askyesno(
+                "Formato inesperado",
+                f"Las API keys de {provider} normalmente empiezan con '{expected_prefix}'.\n"
+                "La que ingresaste no coincide.\n\n¿Guardarla de todas formas?",
+            )
+            if not proceed:
+                return False
+        try:
+            self._update_env_key(_app_dir / ".env", key_name, new_key)
+            enqueue_command(_app_dir, "reload_api_key")
+            return True
+        except Exception as exc:
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo guardar la API key:\n{exc}")
+            return False
 
     def _change_groq_key(self):
-        new_key = self._prompt_api_key(
-            "NAP Files-Sorter - API key de Groq",
+        new_key = self._ask_api_key(
+            "API key de Groq",
             "Pega tu API key de Groq (console.groq.com):",
         )
-        if not new_key:
-            return
-        env_path = _app_dir / ".env"
-        try:
-            self._update_env_key(env_path, "GROQ_API_KEY", new_key)
-            enqueue_command(_app_dir, "reload_api_key")
-            self._status_label.config(text="API key de Groq guardada. NAP Files-Sorter la recargara automaticamente.")
-        except Exception as exc:
-            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo guardar la API key:\n{exc}")
+        if self._save_api_key("GROQ_API_KEY", new_key, "gsk_", "Groq"):
+            self._set_status(C_GREEN, "API key de Groq guardada — se recargara automaticamente")
 
     def _change_gemini_key(self):
-        new_key = self._prompt_api_key(
-            "NAP Files-Sorter - API key de Gemini (opcional)",
-            "Pega tu API key de Gemini (aistudio.google.com/apikey) — opcional, solo como respaldo de Groq:",
+        new_key = self._ask_api_key(
+            "API key de Gemini (opcional)",
+            "Pega tu API key de Gemini (aistudio.google.com/apikey).\n"
+            "Es opcional: se usa como respaldo automatico de Groq.",
         )
-        if not new_key:
-            return
-        env_path = _app_dir / ".env"
-        try:
-            self._update_env_key(env_path, "GOOGLE_API_KEY", new_key)
-            enqueue_command(_app_dir, "reload_api_key")
-            self._status_label.config(text="API key de Gemini guardada. Se usara como respaldo automatico de Groq.")
-        except Exception as exc:
-            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo guardar la API key:\n{exc}")
+        if self._save_api_key("GOOGLE_API_KEY", new_key, "AIza", "Gemini"):
+            self._set_status(C_GREEN, "API key de Gemini guardada — se usara como respaldo")
 
     def _open_logs(self):
         if LOGS_DIR.exists():
@@ -387,6 +589,10 @@ class NAPMonitorApp:
             tkinter.messagebox.showinfo(
                 "NAP Monitor", f"Carpeta de logs no encontrada:\n{LOGS_DIR}"
             )
+
+    def _open_appdata(self):
+        if _app_dir.exists():
+            os.startfile(str(_app_dir))
 
     # --- System tray on minimize ---
 
@@ -402,7 +608,7 @@ class NAPMonitorApp:
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Cerrar", self._on_close),
             )
-            self._tray = pystray.Icon("NAPMonitor", _make_tray_image(), "NAP Monitor", menu)
+            self._tray = pystray.Icon("NAPMonitor", make_logo_image(ACCENT), "NAP Monitor", menu)
             threading.Thread(target=self._tray.run, daemon=True, name="MonitorTray").start()
 
     def _restore(self, icon=None, item=None):

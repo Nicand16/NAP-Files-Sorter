@@ -62,6 +62,8 @@ Files Sorter/
 +-- briner_agent/
     +-- main.py                          ? Punto de entrada �nico (NAPSorter.exe y NAPBackground.exe)
     +-- monitor.py                       ? Punto de entrada de NAPMonitor.exe
+    +-- version.py                       ? Version unica compartida por los 3 exes
+    +-- branding.py                      ? Logo y paleta compartidos (bandeja + Monitor)
     +-- config.yaml                      ? Configuraci�n base + taxonom�a (se empaqueta en el exe)
     +-- requirements.txt
     +-- build_all.bat                    ? Compila los 3 exes con PyInstaller
@@ -86,6 +88,7 @@ Files Sorter/
     +-- runtime/
     �   +-- event_bus.py                 ? Pub/sub de FileEvent (7 estados por archivo)
     �   +-- circuit_breaker.py           ? CLOSED/OPEN/HALF_OPEN para proteger llamadas a Gemini
+    �   +-- single_instance.py           ? Candado de instancia unica (bloqueo de archivo del SO)
     +-- infra/
     �   +-- metrics.py                   ? Contadores y timers en proceso (sin dependencias externas)
     +-- db/
@@ -439,7 +442,7 @@ El zip coloca las 3 carpetas y `Install.bat` al mismo nivel ra�z.
 ```powershell
 cd briner_agent
 python -m pytest tests/ -q
-# Resultado esperado v1.1.0: 54 passed
+# Resultado esperado v1.2.0: 69 passed
 ```
 
 ### Cobertura por archivo de test
@@ -451,6 +454,8 @@ python -m pytest tests/ -q
 | `test_circuit_breaker.py` | Transiciones CLOSED?OPEN?HALF_OPEN?CLOSED, probe exitoso/fallido |
 | `test_decision_cache.py` | LRU eviction, TTL, normalizaci�n de d�gitos en nombres de archivo |
 | `test_orchestrator_recovery.py` | Restauraci�n del recovery base de los circuit breakers tras l�mite diario |
+| `test_user_safety.py` | Carpetas peligrosas, edad m�nima de archivos, candado de instancia �nica |
+| `test_monitor_ui.py` | Smoke test de la UI del Monitor: render, filtro en vivo, validaci�n de API keys |
 
 ---
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.2.0 — 2026-06-11
+
+### A prueba de errores de usuario
+
+- **Carpetas peligrosas bloqueadas**: ya no se puede configurar como workspace la raiz de una unidad (`C:\`), el perfil de usuario completo, ni carpetas del sistema (`Windows`, `Program Files`, `AppData`). Aplica al instalador, al wizard y al cambio de carpeta en caliente desde Monitor o bandeja. Si la carpeta del instalador es invalida, el setup pide otra en vez de abortar con traceback.
+- **Descargas en curso protegidas**: los archivos modificados hace menos de 15 segundos (configurable con `monitoring.min_file_age_seconds`) no se registran todavia, evitando mover descargas o copias a medio escribir. Se agregaron mas patrones de temporales de navegador (`.partial`, `.download`, `.opdownload`).
+- **Instancia unica**: NAPBackground usa un candado de archivo a nivel de SO; si ya hay una instancia organizando la carpeta, la segunda se cierra sola con un mensaje claro. El candado se libera automaticamente si el proceso muere.
+- **Validacion de API keys**: el Monitor valida formato (Groq `gsk_`, Gemini `AIza`), rechaza claves vacias/cortas/con espacios y pide confirmacion si el formato no coincide. El instalador avisa si la key no parece de Groq y la bandeja rechaza claves obviamente invalidas.
+- **Confirmacion al cambiar carpeta**: el Monitor valida la carpeta elegida y muestra un dialogo de confirmacion explicando que se reorganizaran todos los archivos sueltos.
+
+### Interfaz renovada
+
+- **NAP Monitor rediseñado**: encabezado oscuro con marca y estado en color, tarjetas de metricas (pendientes/procesados/errores/ultimo evento), barra de acciones organizada, menu `⚙ Configuracion`, buscador que filtra el historial en vivo, filas rayadas con codigos de color por tipo de evento, y pie con version y ruta de la DB.
+- **Logo propio**: icono de carpeta sobre placa de color, compartido entre la bandeja del sistema, la ventana del Monitor y su icono de ventana (`branding.py`). El color del icono de bandeja sigue indicando estado (verde/azul/rojo).
+- Los dialogos de API key del Monitor ahora son nativos (Tkinter) en lugar de ventanas PowerShell/VisualBasic.
+- Fuentes de decision legibles en el historial ("Regla", "IA (lote)", "Cache"...) en lugar de identificadores internos.
+
+### Otros
+
+- Version unica compartida en `version.py` y nuevo flag `--version`.
+- Documentacion actualizada (manual de uso, README, arquitectura).
+- 15 tests nuevos: carpetas peligrosas, edad minima de archivos, candado de instancia unica y smoke tests de la UI del Monitor (69 en total).
+
 ## v1.1.0 — 2026-06-11
 
 ### Corregido

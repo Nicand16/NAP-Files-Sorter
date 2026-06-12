@@ -54,6 +54,8 @@ from core.settings_manager import (
 from db.database_manager import DatabaseManager
 from modules.periodic_scanner import scan_directory_once
 from runtime.commands import iter_pending_commands, mark_command_done
+from runtime.single_instance import SingleInstanceLock
+from version import APP_NAME, __version__
 
 try:
     from dotenv import load_dotenv
@@ -192,6 +194,7 @@ def _install_startup_shortcut() -> bool:
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="NAP Files-Sorter file organizer")
+    parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     parser.add_argument("--once", action="store_true", help="Escanea y procesa una sola vez.")
     parser.add_argument("--no-scan", action="store_true", help="No registra archivos existentes al arrancar.")
     parser.add_argument("--dry-run", action="store_true", help="Propone movimientos sin tocar archivos.")
@@ -550,7 +553,7 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
 def main():
     _t0_main = time.perf_counter()
     args = build_arg_parser().parse_args()
-    logger.info("Iniciando NAP Files-Sorter - Agente Autonomo de Gestion de Archivos")
+    logger.info("Iniciando %s v%s - Agente Autonomo de Gestion de Archivos", APP_NAME, __version__)
 
     config_path = APP_DIR / "config.yaml"
     if not config_path.exists():
@@ -691,6 +694,15 @@ def main():
         return
 
     # Background (continuous) mode —
+    # Solo una instancia puede organizar la carpeta: dos procesos compartiendo la
+    # misma DB duplicarian movimientos. El SO libera el lock si el proceso muere.
+    instance_lock = SingleInstanceLock(APPDATA_DIR / ".nap.lock")
+    if not instance_lock.acquire():
+        logger.error("Otra instancia de NAP Files-Sorter ya esta corriendo. Este proceso terminara.")
+        print("\n  NAP Files-Sorter ya esta en ejecucion (busca el icono en la bandeja del sistema).")
+        print("  No es necesario abrirlo de nuevo.\n")
+        return
+
     # pystray.Icon.run() MUST execute on the main thread on Windows (frozen, console=False).
     tray = None
     try:

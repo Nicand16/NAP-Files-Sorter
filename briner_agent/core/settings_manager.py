@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,51 @@ def validate_poll_interval(value) -> int:
     return interval
 
 
+def dangerous_workspace_reason(path: str | Path) -> str | None:
+    """Explica por que una carpeta NO debe usarse como workspace, o None si es segura.
+
+    NAP mueve archivos dentro del workspace; elegir una carpeta del sistema o el
+    perfil completo del usuario reorganizaria archivos criticos.
+    """
+    resolved = Path(path).expanduser().resolve()
+
+    # Las carpetas temporales (tests, pruebas manuales) son seguras aunque en
+    # Windows vivan bajo LOCALAPPDATA.
+    import tempfile
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if resolved == temp_root or temp_root in resolved.parents:
+        return None
+
+    if resolved == Path(resolved.anchor):
+        return "es la raiz de la unidad: NAP reorganizaria el disco completo"
+
+    try:
+        home = Path.home().resolve()
+    except RuntimeError:
+        home = None
+    if home is not None and resolved == home:
+        return "es la carpeta raiz de tu perfil de usuario; elige una subcarpeta (ej. Descargas)"
+
+    protected_env = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "APPDATA", "LOCALAPPDATA")
+    for env_name in protected_env:
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        protected = Path(value).resolve()
+        if resolved == protected or protected in resolved.parents:
+            return f"esta dentro de una carpeta del sistema ({protected})"
+        if resolved in protected.parents:
+            return f"contiene carpetas del sistema ({protected})"
+    return None
+
+
 def validate_watch_directory(path_value: str | Path) -> str:
     path = Path(path_value).expanduser()
     if not path.exists() or not path.is_dir():
         raise ValueError(f"La carpeta monitoreada no existe o no es directorio: {path}")
+    danger = dangerous_workspace_reason(path)
+    if danger:
+        raise ValueError(f"Carpeta no permitida: {path} {danger}.")
     return str(path.resolve())
 
 
@@ -135,8 +177,14 @@ def load_or_create_user_settings(
     user_settings = load_user_settings(settings_path)
     if not user_settings and prompt_if_missing:
         if default_dir:
-            user_settings = create_settings_for_dir(default_dir, settings_path)
-        else:
+            try:
+                user_settings = create_settings_for_dir(default_dir, settings_path)
+            except ValueError as exc:
+                # Carpeta inexistente o peligrosa: explicar y dar la oportunidad
+                # de elegir otra en vez de abortar con traceback.
+                print(f"\n  Error con la carpeta indicada: {exc}\n")
+                default_dir = None
+        if not user_settings:
             try:
                 user_settings = prompt_for_initial_settings(settings_path)
             except (EOFError, KeyboardInterrupt, RuntimeError, OSError):

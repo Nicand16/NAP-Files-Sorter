@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 
 
 a = Analysis(
@@ -33,6 +33,9 @@ a = Analysis(
         'runtime.event_bus',
         'runtime.circuit_breaker',
         'runtime.commands',
+        'runtime.single_instance',
+        'version',
+        'branding',
         'classifiers',
         'classifiers.decision_cache',
         'core',

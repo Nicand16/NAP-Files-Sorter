@@ -1,5 +1,6 @@
 import fnmatch
 import logging
+import time
 from pathlib import Path
 
 from runtime.event_bus import FileEvent, FileState, bus
@@ -7,7 +8,10 @@ from runtime.event_bus import FileEvent, FileState, bus
 logger = logging.getLogger(__name__)
 
 DEFAULT_IGNORED_FILENAMES = {".keep", "desktop.ini"}
-DEFAULT_IGNORED_PATTERNS = ["~$*", "*.tmp", "*.temp", "*.crdownload", "*.part"]
+DEFAULT_IGNORED_PATTERNS = ["~$*", "*.tmp", "*.temp", "*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload"]
+# Un archivo modificado hace menos de N segundos puede ser una descarga en curso
+# que no usa extension temporal (ej. guardado directo). Se registra al proximo ciclo.
+DEFAULT_MIN_FILE_AGE_SECONDS = 15
 
 
 def _is_ignored(path: Path, ignored_filenames: set[str], ignored_patterns: list[str]) -> bool:
@@ -50,6 +54,7 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
         for name in monitoring.get("ignored_filenames", DEFAULT_IGNORED_FILENAMES)
     }
     ignored_patterns = monitoring.get("ignored_patterns", DEFAULT_IGNORED_PATTERNS)
+    min_file_age = float(monitoring.get("min_file_age_seconds", DEFAULT_MIN_FILE_AGE_SECONDS))
     category_roots = _category_roots(watch_path, config) if monitoring.get("ignore_existing_categories", True) else set()
 
     if not watch_path.exists() or not watch_path.is_dir():
@@ -59,6 +64,8 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
     detected = 0
     skipped_category = 0
     skipped_ignored = 0
+    skipped_recent = 0
+    now = time.time()
     files = watch_path.rglob("*") if monitoring.get("recursive", False) else watch_path.iterdir()
     for path in files:
         try:
@@ -69,6 +76,10 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
                 continue
             if _is_inside_any(path, category_roots):
                 skipped_category += 1
+                continue
+            if min_file_age > 0 and (now - path.stat().st_mtime) < min_file_age:
+                # Posible descarga/copia en curso: no registrar todavia.
+                skipped_recent += 1
                 continue
             if db_manager.register_file(*_file_info(path)):
                 detected += 1
@@ -104,7 +115,7 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
             logger.warning("No se pudo registrar carpeta %s: %s", path, exc)
 
     logger.info(
-        "Escaneo en %s: %s archivos + %s carpetas registrados | %s en categorias existentes | %s ignorados",
-        watch_path, detected, detected_dirs, skipped_category, skipped_ignored,
+        "Escaneo en %s: %s archivos + %s carpetas registrados | %s en categorias existentes | %s ignorados | %s muy recientes (se reintentan)",
+        watch_path, detected, detected_dirs, skipped_category, skipped_ignored, skipped_recent,
     )
     return detected + detected_dirs
